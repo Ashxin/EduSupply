@@ -8,6 +8,10 @@ const bcrypt = require('bcrypt');
 
 const pool = require('./db');
 
+const jwt = require('jsonwebtoken');
+
+const { error } = require('node:console');
+
 app.use(express.json());
 
 app.post('/signup', async (req, res) => {
@@ -79,6 +83,42 @@ app.post('/signup', async (req, res) => {
 
 })
 
+app.post('/login', async(req, res) => {
+  const { email, password, role } = req.body;
+
+  if(!email || !password || !role) {
+    return res.status(400).json({ error: 'Email, password and role are required.'})
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT id, password_hash, role FROM users WHERE email = $1 AND role = $2', [email, role]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid credentials.'});
+    }
+
+    const user = result.rows[0];
+    const passwordMatches = await bcrypt.compare(password, user.password_hash);
+
+    if(!passwordMatches) {
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, role: user.role },
+      process.env.JWT_SECRET,
+      {expiresIn: '1h' }
+    );
+
+    res.status(200).json({ success: true, token });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong during login.' });
+  }
+});
+
 app.get('/test-db', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
@@ -97,3 +137,5 @@ app.listen(5000, () => {
   console.log('Server is running');
   
 })
+
+
