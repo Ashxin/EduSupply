@@ -119,6 +119,29 @@ app.post('/login', async(req, res) => {
   }
 });
 
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Authorization token missing.' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(401).json({ error: 'Invalid or expired token.' });
+    }
+
+    req.user = decoded;
+    next();
+  });
+}
+
+app.get('/protected-test', authenticateToken, (req, res) => {
+  res.json({ success: true, message: 'You accessed a protected route!', user: req.user });
+});
+
 app.get('/test-db', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
