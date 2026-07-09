@@ -34,3 +34,19 @@ CREATE TABLE products (
   stock_quantity INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT now()
 );
+
+CREATE TABLE orders (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  vendor_id UUID NOT NULL REFERENCES vendor_profiles(id),
+  school_id UUID NOT NULL REFERENCES school_profiles(id),
+  created_at TIMESTAMP DEFAULT now(),
+  status VARCHAR(255) NOT NULL   -- ← still needs this fix from earlier
+);
+
+CREATE TABLE order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  product_id UUID NOT NULL REFERENCES products(id),
+  quantity INT NOT NULL CHECK (quantity > 0),
+  price_at_order NUMERIC(9,2) NOT NULL
+);
