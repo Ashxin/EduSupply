@@ -10,12 +10,10 @@ const pool = require('./db');
 
 const jwt = require('jsonwebtoken');
 
-const { error } = require('node:console');
-
 app.use(express.json());
 
 app.post('/signup', async (req, res) => {
-  const { email, password, role, institution_name, business_name } = req.body;
+  const { email, password, role, institution_name, business_name } = req.body || {};
   if (!email || !password || !role) {
     return res.status(400).json({ error: 'Email, password, and role are required.' });
   }
@@ -83,11 +81,11 @@ app.post('/signup', async (req, res) => {
 
 })
 
-app.post('/login', async(req, res) => {
-  const { email, password, role } = req.body;
+app.post('/login', async (req, res) => {
+  const { email, password, role } = req.body || {};
 
-  if(!email || !password || !role) {
-    return res.status(400).json({ error: 'Email, password and role are required.'})
+  if (!email || !password || !role) {
+    return res.status(400).json({ error: 'Email, password and role are required.' })
   }
 
   try {
@@ -96,20 +94,20 @@ app.post('/login', async(req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials.'});
+      return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
     const user = result.rows[0];
     const passwordMatches = await bcrypt.compare(password, user.password_hash);
 
-    if(!passwordMatches) {
+    if (!passwordMatches) {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
     const token = jwt.sign(
       { id: user.id, role: user.role },
       process.env.JWT_SECRET,
-      {expiresIn: '1h' }
+      { expiresIn: '1h' }
     );
 
     res.status(200).json({ success: true, token });
@@ -119,6 +117,115 @@ app.post('/login', async(req, res) => {
   }
 });
 
+app.post('/products', authenticateToken, checkVendorRole, attachVendorProfileId, async (req, res) => {
+  const { name, price, category, stock_quantity } = req.body || {};
+
+  const finalStock = stock_quantity ?? 0;
+
+  if (!name || !category) {
+    return res.status(400).json({
+      error: 'Name and category are required'
+    })
+  }
+
+  if (typeof price !== "number" || price <= 0) {
+    return res.status(400).json({
+      error: 'Invalid Price'
+    })
+  }
+  try {
+    const result = await pool.query(
+      'INSERT INTO products (vendor_id, name, price, category, stock_quantity) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [req.vendorProfileId, name, price, category, finalStock]
+    )
+    return res.status(201).json({ product: result.rows[0] })
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Something went wrong while creating the product.' })
+  }
+
+});
+
+app.put('/products/:id', authenticateToken, checkVendorRole, attachVendorProfileId, async (req, res) => {
+  const { name, price, category, stock_quantity } = req.body || {};
+
+  try {
+    const check = await pool.query(
+      'SELECT id FROM products WHERE id = $1 AND vendor_id = $2',
+      [req.params.id, req.vendorProfileId]
+    );
+
+    if (check.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found.' });
+    }
+
+    const fields = [];
+    const values = [];
+
+    if (name) {
+      fields.push(`name = $${values.length + 1}`);
+      values.push(name);
+    }
+
+    if (price !== undefined) {
+      if (typeof price !== "number" || price <= 0) {
+        return res.status(400).json({ error: 'Invalid Price' });
+      }
+      fields.push(`price = $${values.length + 1}`);
+      values.push(price);
+    }
+
+    if (category) {
+      fields.push(`category = $${values.length + 1}`);
+      values.push(category);
+    }
+
+    if (stock_quantity !== undefined) {
+      if (typeof stock_quantity !== "number" || stock_quantity < 0) {
+        return res.status(400).json({ error: 'Invalid stock_quantity' });
+      }
+      fields.push(`stock_quantity = $${values.length + 1}`);
+      values.push(stock_quantity);
+    }
+
+    if (fields.length === 0) {
+      return res.status(400).json({ error: 'At least one field (name, price, category, stock_quantity) must be provided.' });
+    }
+
+    const setClause = fields.join(', ');
+    const idPlaceholder = values.length + 1;
+    values.push(req.params.id);
+
+    const updateQuery = `UPDATE products SET ${setClause} WHERE id = $${idPlaceholder} RETURNING *`;
+    const result = await pool.query(updateQuery, values);
+
+    res.status(200).json({ product: result.rows[0] });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong while updating the product.' });
+  }
+});
+
+
+app.delete('/products/:id', authenticateToken, checkVendorRole, attachVendorProfileId, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'DELETE FROM products WHERE id = $1 AND vendor_id = $2',
+      [req.params.id, req.vendorProfileId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Product not found.' });
+    }
+
+    res.status(204).send();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong while deleting the product.' });
+  }
+});
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -137,6 +244,39 @@ function authenticateToken(req, res, next) {
     next();
   });
 }
+
+
+function checkVendorRole(req, res, next) {
+  if (req.user.role !== 'vendor') {
+    return res.status(403).json({ error: 'Wrong role selected' });
+  }
+  next();
+}
+
+
+async function attachVendorProfileId(req, res, next) {
+
+  try {
+    const result = await pool.query(
+      'SELECT id FROM vendor_profiles WHERE user_id = $1',
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(500).json({ error: 'Vendor profile not found.' });
+    }
+
+    req.vendorProfileId = result.rows[0].id;
+    next();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong while fetching the vendor profile.' });
+
+  }
+
+}
+
+
 
 app.get('/protected-test', authenticateToken, (req, res) => {
   res.json({ success: true, message: 'You accessed a protected route!', user: req.user });
@@ -158,7 +298,5 @@ app.get('/', (req, res) => {
 
 app.listen(5000, () => {
   console.log('Server is running');
-  
+
 })
-
-
