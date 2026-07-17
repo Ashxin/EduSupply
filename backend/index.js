@@ -9,6 +9,7 @@ const bcrypt = require('bcrypt');
 const pool = require('./db');
 
 const jwt = require('jsonwebtoken');
+const { error } = require('node:console');
 
 app.use(express.json());
 
@@ -227,6 +228,79 @@ app.delete('/products/:id', authenticateToken, checkVendorRole, attachVendorProf
   }
 });
 
+
+app.post('/orders', authenticateToken, checkSchoolRole, attachSchoolProfileId, async (req, res) => {
+  const { vendor_id, items } = req.body || {};
+
+  if (!vendor_id || !items || !Array.isArray(items) || items.length == 0) {
+    return res.status(400).json({ error: 'Incomplete fields' })
+  }
+
+  const allItemsValid = items.every(item => {
+    return item.product_id && typeof item.quantity === "number" && item.quantity > 0;
+  });
+
+  if (!allItemsValid) {
+    return res.status(400).json({ error: 'Invalid items' });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      'INSERT INTO orders (vendor_id, school_id, status) VALUES ($1, $2, $3) RETURNING *', [vendor_id ,req.schoolProfileId, 'pending']
+    )
+
+    const orderId = result.rows[0].id; 
+    for (const item of items) {
+      const result = await client.query(
+        `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2 AND stock_quantity >= $1 RETURNING price`,
+        [item.quantity, item.product_id]
+      );
+
+      if (result.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: `Insufficient stock for product ${item.product_id}.` });
+      }
+
+      const priceAtOrder = result.rows[0].price;
+
+      await client.query(
+        'INSERT INTO order_items (order_id, product_id, quantity, price_at_order) VALUES ($1, $2, $3, $4) RETURNING *',
+        [orderId, item.product_id, item.quantity, priceAtOrder]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({ success: true, order_id: orderId})
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong during ordering'});
+  } finally {
+    client.release();
+  }
+
+})
+
+app.get('/orders', authenticateToken, checkSchoolRole, attachSchoolProfileId, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM orders WHERE school_id = $1',
+      [req.schoolProfileId]
+    );
+    res.status(200).json({ success: true, orders: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unable to view the order' });
+  }
+});
+
+
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -248,6 +322,13 @@ function authenticateToken(req, res, next) {
 
 function checkVendorRole(req, res, next) {
   if (req.user.role !== 'vendor') {
+    return res.status(403).json({ error: 'Wrong role selected' });
+  }
+  next();
+}
+
+function checkSchoolRole (req, res, next) {
+  if (req.user.role !== 'school') {
     return res.status(403).json({ error: 'Wrong role selected' });
   }
   next();
@@ -276,6 +357,23 @@ async function attachVendorProfileId(req, res, next) {
 
 }
 
+
+async function attachSchoolProfileId(req, res, next) {
+  try {
+    const result = await pool.query(
+      'SELECT id FROM school_profiles WHERE user_id = $1',
+      [req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(500).json({ error: 'School profile not found.' });
+    }
+    req.schoolProfileId = result.rows[0].id;
+    next();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong while fetching the schoolprofile.' });
+  }
+}
 
 
 app.get('/protected-test', authenticateToken, (req, res) => {
