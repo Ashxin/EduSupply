@@ -13,6 +13,14 @@ const { error } = require('node:console');
 
 app.use(express.json());
 
+const validTransitions = {
+  pending: ['accepted', 'canceled'],
+  accepted: ['in_progress', 'canceled'],
+  in_progress: ['completed'],
+  completed: [],
+  canceled: []
+};
+
 app.post('/signup', async (req, res) => {
   const { email, password, role, institution_name, business_name } = req.body || {};
   if (!email || !password || !role) {
@@ -299,6 +307,64 @@ app.get('/orders', authenticateToken, checkSchoolRole, attachSchoolProfileId, as
     res.status(500).json({ error: 'Unable to view the order' });
   }
 });
+
+app.put('/orders/:id/status', authenticateToken, async (req, res) => {
+  const { status: newStatus } = req.body || {};
+  const orderId = req.params.id;
+
+  if (!newStatus) {
+  return res.status(400).json({ error: 'Status is required.' });
+  }
+  try {
+    const result = await pool.query (
+      'SELECT status, vendor_id, school_id FROM orders WHERE id = $1', [orderId]
+    );
+    if (result.rows.length === 0) {
+    return res.status(404).json({ error: 'Order not found.' });
+    }
+    const order = result.rows[0];
+
+    if (req.user.role === 'vendor') {
+        const vendorCheck = await pool.query(
+        'SELECT id FROM vendor_profiles WHERE user_id = $1',
+        [req.user.id]
+        );
+        if (vendorCheck.rows.length === 0) {
+        return res.status(500).json({ error: 'Vendor profile not found.' });
+      }
+        req.vendorProfileId = vendorCheck.rows[0].id;
+        if (order.vendor_id !== req.vendorProfileId) {
+          return res.status(404).json({ error: 'Order not Found.'})
+        }
+        if (!validTransitions[order.status].includes(newStatus)) {
+          return res.status(400).json({ error: 'Invalid status transition.' });
+        }
+    } else if (req.user.role === 'school') {
+        const schoolCheck = await pool.query( 'SELECT id FROM school_profiles WHERE user_id = $1', [req.user.id]);
+        if (schoolCheck.rows.length === 0) {
+        return res.status(500).json({ error: 'School profile not found.' });
+      } 
+      req.schoolProfileId = schoolCheck.rows[0].id;
+      if (order.school_id !== req.schoolProfileId) {
+        return res.status(404).json({ error: 'Order not Found.'})
+      }
+      if (newStatus !== 'canceled') {
+        return res.status(403).json({ error: 'Schools can only cancel orders.' });
+      }
+      if (!validTransitions[order.status].includes(newStatus)) {
+          return res.status(400).json({ error: 'Invalid status transition.' });
+      }
+    } else {
+       return res.status(500).json({ error: 'Unrecognized user role.' });
+    }
+    const updateQuery = `UPDATE orders SET status = $1 WHERE id = $2 RETURNING *`;
+    const newOrderStatus = await pool.query(updateQuery, [newStatus, orderId]);
+    res.status(200).json({ order: newOrderStatus.rows[0] });
+  } catch (err){
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong while updating order status.'})
+  }
+})
 
 
 function authenticateToken(req, res, next) {

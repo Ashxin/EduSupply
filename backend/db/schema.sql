@@ -40,7 +40,7 @@ CREATE TABLE orders (
   vendor_id UUID NOT NULL REFERENCES vendor_profiles(id),
   school_id UUID NOT NULL REFERENCES school_profiles(id),
   created_at TIMESTAMP DEFAULT now(),
-  status VARCHAR(255) NOT NULL   -- ← still needs this fix from earlier
+  status VARCHAR(255) NOT NULL CHECK (status IN ('pending', 'accepted', 'in_progress', 'completed', 'canceled'))
 );
 
 CREATE TABLE order_items (
