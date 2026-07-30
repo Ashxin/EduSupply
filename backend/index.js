@@ -252,46 +252,8 @@ app.post('/orders', authenticateToken, checkSchoolRole, attachSchoolProfileId, a
     return res.status(400).json({ error: 'Invalid items' });
   }
 
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    const result = await client.query(
-      'INSERT INTO orders (vendor_id, school_id, status) VALUES ($1, $2, $3) RETURNING *', [vendor_id ,req.schoolProfileId, 'pending']
-    )
-
-    const orderId = result.rows[0].id; 
-    for (const item of items) {
-      const result = await client.query(
-        `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2 AND stock_quantity >= $1 RETURNING price`,
-        [item.quantity, item.product_id]
-      );
-
-      if (result.rowCount === 0) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ error: `Insufficient stock for product ${item.product_id}.` });
-      }
-
-      const priceAtOrder = result.rows[0].price;
-
-      await client.query(
-        'INSERT INTO order_items (order_id, product_id, quantity, price_at_order) VALUES ($1, $2, $3, $4) RETURNING *',
-        [orderId, item.product_id, item.quantity, priceAtOrder]
-      );
-    }
-
-    await client.query('COMMIT');
-
-    res.status(201).json({ success: true, order_id: orderId})
-
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error(err);
-    res.status(500).json({ error: 'Something went wrong during ordering'});
-  } finally {
-    client.release();
-  }
+  const orderResult = await createOrder(req.schoolProfileId, vendor_id, items);
+  return res.status(orderResult.status).json(orderResult);
 
 })
 
@@ -366,6 +328,31 @@ app.put('/orders/:id/status', authenticateToken, async (req, res) => {
   }
 })
 
+app.post('/orders/:id/reorder', authenticateToken, checkSchoolRole, attachSchoolProfileId, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, school_id, vendor_id FROM orders WHERE id = $1 AND school_id = $2',
+      [req.params.id, req.schoolProfileId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    const oldOrder = result.rows[0];
+
+    const itemsResult = await pool.query(
+      'SELECT product_id, quantity FROM order_items WHERE order_id = $1',
+      [oldOrder.id]
+    );
+
+    const orderResult = await createOrder(req.schoolProfileId, oldOrder.vendor_id, itemsResult.rows);
+    return res.status(orderResult.status).json(orderResult);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong while reordering.' });
+  }
+});
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -438,6 +425,48 @@ async function attachSchoolProfileId(req, res, next) {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Something went wrong while fetching the schoolprofile.' });
+  }
+}
+
+async function createOrder(schoolId, vendorId, items) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const orderResult = await client.query(
+      'INSERT INTO orders (vendor_id, school_id, status) VALUES ($1, $2, $3) RETURNING *',
+      [vendorId, schoolId, 'pending']
+    );
+    const orderId = orderResult.rows[0].id;
+
+    for (const item of items) {
+      const stockResult = await client.query(
+        `UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2 AND stock_quantity >= $1 RETURNING price`,
+        [item.quantity, item.product_id]
+      );
+
+      if (stockResult.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, status: 409, error: `Insufficient stock for product ${item.product_id}.` };
+      }
+
+      const priceAtOrder = stockResult.rows[0].price;
+
+      await client.query(
+        'INSERT INTO order_items (order_id, product_id, quantity, price_at_order) VALUES ($1, $2, $3, $4)',
+        [orderId, item.product_id, item.quantity, priceAtOrder]
+      );
+    }
+
+    await client.query('COMMIT');
+    return { success: true, status: 201, order_id: orderId };
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    return { success: false, status: 500, error: 'Something went wrong during ordering' };
+  } finally {
+    client.release();
   }
 }
 
