@@ -354,6 +354,28 @@ app.post('/orders/:id/reorder', authenticateToken, checkSchoolRole, attachSchool
   }
 });
 
+// School side
+app.get('/orders/monthly', authenticateToken, checkSchoolRole, attachSchoolProfileId, async (req, res) => {
+  try {
+    const monthlyCounts = await getMonthlyOrderCounts('school_id', req.schoolProfileId);
+    res.status(200).json({ success: true, monthly_orders: monthlyCounts });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unable to retrieve monthly order data.' });
+  }
+});
+
+// Vendor side
+app.get('/vendor/orders/monthly', authenticateToken, checkVendorRole, attachVendorProfileId, async (req, res) => {
+  try {
+    const monthlyCounts = await getMonthlyOrderCounts('vendor_id', req.vendorProfileId);
+    res.status(200).json({ success: true, monthly_orders: monthlyCounts });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unable to retrieve monthly order data.' });
+  }
+});
+
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -470,6 +492,17 @@ async function createOrder(schoolId, vendorId, items) {
   }
 }
 
+async function getMonthlyOrderCounts(ownerColumn, ownerId) {
+  const result = await pool.query(
+    `SELECT DATE_TRUNC('month', created_at) AS month, COUNT(*) AS order_count
+     FROM orders
+     WHERE ${ownerColumn} = $1 AND status != 'canceled'
+     GROUP BY month
+     ORDER BY month ASC`,
+    [ownerId]
+  );
+  return result.rows;
+}
 
 app.get('/protected-test', authenticateToken, (req, res) => {
   res.json({ success: true, message: 'You accessed a protected route!', user: req.user });
