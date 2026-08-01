@@ -8,10 +8,14 @@ const bcrypt = require('bcrypt');
 
 const pool = require('./db');
 
+const cors = require('cors');
+
 const jwt = require('jsonwebtoken');
 const { error } = require('node:console');
 
 app.use(express.json());
+
+app.use(cors());
 
 const validTransitions = {
   pending: ['accepted', 'canceled'],
