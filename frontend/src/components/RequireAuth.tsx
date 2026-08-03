@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { jwtDecode } from 'jwt-decode';
+import Spinner from '@/components/Spinner';
 
 interface DecodedToken {
   id: string;
@@ -42,7 +43,11 @@ export default function RequireAuth({
   }, [role, router]);
 
   if (!checked) {
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Spinner />
+      </div>
+    );
   }
 
   return <>{children}</>;
