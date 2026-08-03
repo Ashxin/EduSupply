@@ -552,25 +552,12 @@ async function getMonthlyOrderCounts(ownerColumn, ownerId) {
   return result.rows;
 }
 
-app.get('/protected-test', authenticateToken, (req, res) => {
-  res.json({ success: true, message: 'You accessed a protected route!', user: req.user });
-});
-
-app.get('/test-db', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT NOW()');
-    res.json({ success: true, time: result.rows[0] });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 app.get('/', (req, res) => {
   res.send('Server is running');
 })
 
-app.listen(5000, () => {
-  console.log('Server is running');
+const PORT = process.env.PORT || 5000;
 
-})
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
