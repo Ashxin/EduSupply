@@ -380,6 +380,50 @@ app.get('/vendor/orders/monthly', authenticateToken, checkVendorRole, attachVend
   }
 });
 
+app.get('/orders/:id', authenticateToken, checkSchoolRole, attachSchoolProfileId, async (req, res) => {
+  try {
+    const orderResult = await pool.query(
+      'SELECT id, vendor_id, school_id, status, created_at FROM orders WHERE id = $1 AND school_id = $2',
+      [req.params.id, req.schoolProfileId]
+    );
+
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found.' });
+    }
+
+    const itemsResult = await pool.query(
+      `SELECT oi.product_id, oi.quantity, oi.price_at_order, p.name
+       FROM order_items oi
+       JOIN products p ON oi.product_id = p.id
+       WHERE oi.order_id = $1`,
+      [req.params.id]
+    );
+
+    res.status(200).json({
+      success: true,
+      order: orderResult.rows[0],
+      items: itemsResult.rows,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Something went wrong while fetching the order.' });
+  }
+});
+
+app.get('/products', authenticateToken, checkVendorRole, attachVendorProfileId, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM products WHERE vendor_id = $1 ORDER BY created_at DESC',
+      [req.vendorProfileId]
+    );
+    res.status(200).json({ success: true, products: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Unable to retrieve products.' });
+  }
+});
+
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
