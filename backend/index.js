@@ -15,7 +15,9 @@ const { error } = require('node:console');
 
 app.use(express.json());
 
-app.use(cors());
+app.use(cors({
+  origin: ['https://edu-supply-three.vercel.app', 'http://localhost:3000']
+}));
 
 const validTransitions = {
   pending: ['accepted', 'canceled'],
